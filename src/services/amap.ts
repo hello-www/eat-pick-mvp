@@ -111,7 +111,11 @@ export async function searchNearbyFood(params: {
 }
 
 export function openAmapNavigation(place: Place) {
+  window.location.href = getAmapNavigationUrl(place);
+}
+
+export function getAmapNavigationUrl(place: Place) {
   const { lng, lat } = place.location;
-  const uri = `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(place.name)}&src=eat-pick-mvp&coordinate=gaode&callnative=1`;
-  window.open(uri, "_blank", "noopener,noreferrer");
+  const destination = `${lng},${lat},${place.name}`;
+  return `https://uri.amap.com/navigation?to=${encodeURIComponent(destination)}&mode=walk&policy=1&src=eat-pick-mvp&coordinate=gaode&callnative=1`;
 }

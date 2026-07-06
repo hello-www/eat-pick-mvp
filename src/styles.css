@@ -98,7 +98,8 @@ h1 {
 .primary-button,
 .category-chip,
 .subtype-chip,
-.place-actions button {
+.place-actions button,
+.place-actions a {
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #edf8f5;
   background: rgba(255, 255, 255, 0.06);
@@ -157,6 +158,11 @@ h1 {
 button:hover:not(:disabled) {
   transform: translateY(-2px);
   border-color: rgba(126, 238, 212, 0.5);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
 .status-strip {
@@ -709,6 +715,159 @@ button.taste-bubble:hover:not(:disabled) small {
   font-size: 0.9rem;
 }
 
+.place-actions a {
+  display: inline-flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
+
+.place-actions a:hover {
+  transform: translateY(-2px);
+  border-color: rgba(126, 238, 212, 0.5);
+}
+
+.ai-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(2, 8, 10, 0.68);
+  backdrop-filter: blur(16px);
+}
+
+.ai-modal {
+  width: min(920px, 100%);
+  max-height: min(820px, calc(100vh - 44px));
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid rgba(126, 238, 212, 0.2);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 16% 0%, rgba(126, 238, 212, 0.16), transparent 20rem),
+    radial-gradient(circle at 92% 6%, rgba(255, 122, 171, 0.14), transparent 18rem),
+    rgba(13, 20, 24, 0.94);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.54);
+}
+
+.ai-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.ai-modal-head h2 {
+  margin-bottom: 0;
+  font-size: 1.65rem;
+}
+
+.ai-modal-head .icon-button {
+  flex: 0 0 auto;
+}
+
+.ai-orbit-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 38px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.ai-orbit-line span {
+  padding: 8px 12px;
+  border: 1px solid rgba(126, 238, 212, 0.26);
+  border-radius: 999px;
+  color: #dff7f1;
+  font-size: 0.9rem;
+  font-weight: 800;
+  background:
+    linear-gradient(135deg, rgba(126, 238, 212, 0.14), rgba(255, 122, 171, 0.1)),
+    rgba(255, 255, 255, 0.05);
+}
+
+.ai-orbit-rolling span {
+  animation: pulse 420ms ease both infinite alternate;
+}
+
+.ai-result-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ai-result-card {
+  display: grid;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.ai-card-copy {
+  min-width: 0;
+}
+
+.ai-card-copy .place-rank.mini {
+  position: static;
+  display: inline-grid;
+  width: 34px;
+  height: 30px;
+  margin-bottom: 8px;
+  border-radius: 11px;
+  font-size: 0.84rem;
+}
+
+.ai-card-copy h3 {
+  display: -webkit-box;
+  min-height: 2.55em;
+  margin-bottom: 7px;
+  overflow: hidden;
+  font-size: 1rem;
+  line-height: 1.28;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ai-card-copy p {
+  min-height: 4.2em;
+  margin-bottom: 10px;
+  color: #b9c8c5;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.ai-loading {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  border: 1px dashed rgba(126, 238, 212, 0.24);
+  border-radius: 18px;
+  color: #dff7f1;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ai-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
 .manual-dock {
   display: flex;
   gap: 10px;
@@ -771,6 +930,10 @@ button.taste-bubble:hover:not(:disabled) small {
   .result-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .ai-result-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
@@ -826,5 +989,18 @@ button.taste-bubble:hover:not(:disabled) small {
 
   .result-list {
     grid-template-columns: 1fr;
+  }
+
+  .ai-modal {
+    padding: 14px;
+    border-radius: 20px;
+  }
+
+  .ai-modal-actions {
+    justify-content: stretch;
+  }
+
+  .ai-modal-actions .ghost-button {
+    flex: 1 1 100%;
   }
 }
