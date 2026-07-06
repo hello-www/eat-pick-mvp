@@ -13,10 +13,11 @@ import {
   Shuffle,
   Sparkles,
   Utensils,
+  X,
 } from "lucide-react";
 import { foodCategories } from "./data/food";
 import { getBrowserLocation, type LocationStatus } from "./services/location";
-import { hasAmapKey, openAmapNavigation, searchNearbyFood } from "./services/amap";
+import { getAmapNavigationUrl, hasAmapKey, searchNearbyFood } from "./services/amap";
 import { recommendPlaces } from "./services/recommend";
 import type { FoodCategoryId, GeoLocation, Place, RecommendResponse } from "./types";
 
@@ -87,7 +88,10 @@ export default function App() {
   const [isRolling, setIsRolling] = useState(false);
   const [rollingSubtypes, setRollingSubtypes] = useState<string[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>("distance");
-  const [recommendation, setRecommendation] = useState<RecommendResponse | null>(null);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiRecommendation, setAiRecommendation] = useState<RecommendResponse | null>(null);
+  const [aiPool, setAiPool] = useState<Place[]>([]);
+  const [aiSubtypes, setAiSubtypes] = useState<string[]>([]);
   const lockedRecommendation = useRef<RecommendResponse | null>(null);
 
   const category = useMemo(
@@ -102,22 +106,21 @@ export default function App() {
     return normalized.length ? normalized : fallbackCategory.subtypes.slice(0, 2).map((item) => item.id);
   }
 
-  const displaySubtypeIds = normalizeSubtypes(
-    isRolling && rollingSubtypes.length ? rollingSubtypes : selectedSubtypes,
-  );
+  const displaySubtypeIds = normalizeSubtypes(selectedSubtypes);
   const displaySubtypes = displaySubtypeIds
     .map((subtypeId) => category.subtypes.find((item) => item.id === subtypeId))
     .filter(Boolean) as typeof category.subtypes;
 
-  const recommendedPlaces = useMemo(() => {
-    if (!recommendation) return [];
-    return recommendation.picks
+  const aiRecommendedPlaces = useMemo(() => {
+    if (!aiRecommendation) return [];
+    return aiRecommendation.picks
       .map((pick) => {
-        const place = places.find((item) => item.id === pick.placeId);
+        const place = aiPool.find((item) => item.id === pick.placeId);
         return place ? { place, pick } : null;
       })
+      .slice(0, 3)
       .filter(Boolean) as Array<{ place: Place; pick: RecommendResponse["picks"][number] }>;
-  }, [places, recommendation]);
+  }, [aiPool, aiRecommendation]);
 
   const sortedPlaces = useMemo(() => {
     return [...places].sort((a, b) => {
@@ -130,18 +133,13 @@ export default function App() {
   }, [places, sortMode]);
 
   const resultItems = useMemo(
-    () =>
-      recommendedPlaces.length
-        ? recommendedPlaces.map(({ place, pick }) => ({ place, pick }))
-        : sortedPlaces.map((place) => ({ place, pick: null })),
-    [recommendedPlaces, sortedPlaces],
+    () => sortedPlaces.map((place) => ({ place, pick: null })),
+    [sortedPlaces],
   );
 
   const resultCountLabel = isSearching
     ? "搜索中..."
-    : recommendation
-      ? `${resultItems.length} 个AI答案`
-      : `${resultItems.length} 家可选`;
+    : `${resultItems.length} 家可选`;
 
   function getRandomSubtypeGroup(avoidSubtypes = selectedSubtypes) {
     const normalize = (ids: string[]) => [...ids].sort().join("|");
@@ -173,7 +171,6 @@ export default function App() {
     const targetCategory = foodCategories.find((item) => item.id === categoryId) ?? category;
     const cleanSubtypes = normalizeSubtypes(subtypeIds, targetCategory);
     setIsSearching(true);
-    setRecommendation(null);
     const result = await searchNearbyFood({
       location,
       category: categoryId,
@@ -208,51 +205,87 @@ export default function App() {
   }
 
   async function runAiPick() {
-    if (isRolling || !places.length) return;
+    if (isRolling || !sortedPlaces.length) return;
     setIsRolling(true);
-    setRecommendation(null);
+    setAiModalOpen(true);
+    setAiRecommendation(null);
+    setAiPool(sortedPlaces);
     lockedRecommendation.current = null;
     const finalSubtypes = getRandomSubtypeGroup(selectedSubtypes);
+    setAiSubtypes(finalSubtypes);
 
     const startedAt = Date.now();
     const rollTimer = window.setInterval(() => {
-      setRollingSubtypes(getRandomSubtypeGroup());
+      const nextRolling = getRandomSubtypeGroup();
+      setRollingSubtypes(nextRolling);
+      setAiSubtypes(nextRolling);
     }, 140);
 
     window.setTimeout(() => {
       window.clearInterval(rollTimer);
       setRollingSubtypes(finalSubtypes);
+      setAiSubtypes(finalSubtypes);
 
       void (async () => {
-        setSelectedSubtypes(finalSubtypes);
-        const nextPlaces = await refreshPlaces(selectedCategory, finalSubtypes);
         const locked = await recommendPlaces({
           userText,
           location,
           selectedCategory,
-          selectedSubtypes: finalSubtypes,
-          places: nextPlaces,
+          selectedSubtypes,
+          places: sortedPlaces,
         });
         lockedRecommendation.current = locked;
 
         const elapsed = Date.now() - startedAt;
         window.setTimeout(() => {
-          setRecommendation(lockedRecommendation.current);
+          setAiRecommendation(lockedRecommendation.current);
           setIsRolling(false);
           setRollingSubtypes([]);
-          setStatusMessage(`AI 随机换了一组口味，并看完 ${nextPlaces.length} 个选择。`);
+          setStatusMessage(`AI 看完当前 ${sortedPlaces.length} 个选择，给你圈了 3 个答案。`);
         }, Math.max(0, 2600 - elapsed));
       })();
     }, 1600);
   }
 
-  function showNearbyResults() {
-    setRecommendation(null);
+  async function rerollAiBatch() {
+    if (isRolling || !aiPool.length) return;
+    setIsRolling(true);
+    setAiRecommendation(null);
+    const nextSubtypes = getRandomSubtypeGroup(aiSubtypes.length ? aiSubtypes : selectedSubtypes);
+    setAiSubtypes(nextSubtypes);
+
+    const startedAt = Date.now();
+    const rollTimer = window.setInterval(() => {
+      setAiSubtypes(getRandomSubtypeGroup());
+    }, 130);
+
+    const locked = await recommendPlaces({
+      userText,
+      location,
+      selectedCategory,
+      selectedSubtypes,
+      places: aiPool,
+    });
+
+    window.setTimeout(() => {
+      window.clearInterval(rollTimer);
+      setAiSubtypes(nextSubtypes);
+      setAiRecommendation(locked);
+      setIsRolling(false);
+    }, Math.max(0, 1200 - (Date.now() - startedAt)));
+  }
+
+  function closeAiModal() {
+    setAiModalOpen(false);
+    setAiRecommendation(null);
+    setAiPool([]);
+    setAiSubtypes([]);
+    setRollingSubtypes([]);
+    setIsRolling(false);
   }
 
   function changeSortMode(nextMode: SortMode) {
     setSortMode(nextMode);
-    showNearbyResults();
   }
 
   function rerollSubtype() {
@@ -270,7 +303,7 @@ export default function App() {
       return;
     }
     const next = alternatives[Math.floor(Math.random() * alternatives.length)];
-    setRecommendation({
+    setAiRecommendation({
       fallbackSubtype: next.subtype,
       picks: [
         {
@@ -417,7 +450,7 @@ export default function App() {
           <div className="results-head">
             <div>
               <p className="eyebrow">NEARBY</p>
-              <h2>{recommendation ? "AI 推荐结果" : "附近可选店铺"}</h2>
+              <h2>附近可选店铺</h2>
             </div>
             <div className="result-tools">
               <div className="filter-controls" aria-label="店铺筛选">
@@ -439,7 +472,7 @@ export default function App() {
           </div>
 
           <div className="result-list">
-            {resultItems.map(({ place, pick }, index) => (
+            {resultItems.map(({ place }, index) => (
               <article className="place-card" key={`${place.id}-${index}`}>
                 <div className="place-rank">{String(index + 1).padStart(2, "0")}</div>
                 <div className={`place-photo ${place.photos?.[0] ? "" : "place-photo-empty"}`}>
@@ -457,31 +490,103 @@ export default function App() {
                 <div className="place-body">
                   <div>
                     <h3>{place.name}</h3>
-                    <p>{pick?.reason ?? place.address}</p>
+                    <p>{place.address}</p>
                   </div>
                   <div className="place-meta">
                     <span>{formatDistance(place.distance)}</span>
                     {place.rating ? <span>{place.rating.toFixed(1)} 分</span> : null}
-                    {pick ? <span>{pick.confidence}% 匹配</span> : null}
                   </div>
                 </div>
                 <div className="place-actions">
-                  {pick ? (
-                    <button onClick={() => swapSameType(place)} title="换同类型店铺">
-                      <RefreshCw size={16} />
-                      <span>换一家</span>
-                    </button>
-                  ) : null}
-                  <button onClick={() => openAmapNavigation(place)} title="打开地图导航">
+                  <a href={getAmapNavigationUrl(place)} target="_blank" rel="noreferrer" title="打开地图导航">
                     <Navigation size={16} />
                     <span>去这里</span>
-                  </button>
+                  </a>
                 </div>
               </article>
             ))}
           </div>
         </div>
       </section>
+
+      {aiModalOpen ? (
+        <div className="ai-modal-backdrop" onClick={closeAiModal}>
+          <section className="ai-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="ai-modal-head">
+              <div>
+                <p className="eyebrow">AI PICK</p>
+                <h2>先吃这 3 家</h2>
+              </div>
+              <button className="icon-button" onClick={closeAiModal} title="关闭 AI 推荐">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={`ai-orbit-line ${isRolling ? "ai-orbit-rolling" : ""}`}>
+              {(aiSubtypes.length ? aiSubtypes : selectedSubtypes).map((subtypeId) => {
+                const subtype = category.subtypes.find((item) => item.id === subtypeId);
+                return subtype ? <span key={subtype.id}>{subtype.name}</span> : null;
+              })}
+            </div>
+
+            {aiRecommendedPlaces.length ? (
+              <div className="ai-result-grid">
+                {aiRecommendedPlaces.map(({ place, pick }, index) => (
+                  <article className="ai-result-card" key={`${place.id}-${index}`}>
+                    <div className={`place-photo ${place.photos?.[0] ? "" : "place-photo-empty"}`}>
+                      {place.photos?.[0] ? (
+                        <img
+                          src={place.photos[0]}
+                          alt={`${place.name} 店铺照片`}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <span>{place.name.slice(0, 1)}</span>
+                      )}
+                    </div>
+                    <div className="ai-card-copy">
+                      <span className="place-rank mini">{String(index + 1).padStart(2, "0")}</span>
+                      <h3>{place.name}</h3>
+                      <p>{pick.reason}</p>
+                      <div className="place-meta">
+                        <span>{formatDistance(place.distance)}</span>
+                        {place.rating ? <span>{place.rating.toFixed(1)} 分</span> : null}
+                        <span>{pick.confidence}% 匹配</span>
+                      </div>
+                    </div>
+                    <div className="place-actions">
+                      <button onClick={() => swapSameType(place)} title="换同类型店铺">
+                        <RefreshCw size={16} />
+                        <span>换一家</span>
+                      </button>
+                      <a href={getAmapNavigationUrl(place)} target="_blank" rel="noreferrer" title="打开地图导航">
+                        <Navigation size={16} />
+                        <span>去这里</span>
+                      </a>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="ai-loading">
+                <RotateCcw size={24} className="spin" />
+                <span>AI 正在从当前筛选结果里洗牌</span>
+              </div>
+            )}
+
+            <div className="ai-modal-actions">
+              <button className="ghost-button" onClick={rerollAiBatch} disabled={isRolling || !aiPool.length}>
+                <Shuffle size={16} />
+                不满意，换一批
+              </button>
+              <button className="ghost-button" onClick={closeAiModal}>
+                继续自己找
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <section className="manual-dock">
         <MapPinned size={18} />
