@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Compass,
   CupSoda,
@@ -17,9 +17,35 @@ import {
 } from "lucide-react";
 import { foodCategories } from "./data/food";
 import { getBrowserLocation, type LocationStatus } from "./services/location";
-import { getAmapNavigationUrl, hasAmapKey, searchNearbyFood } from "./services/amap";
+import {
+  geocodeKeyword,
+  getCurrentWeather,
+  getAmapNavigationUrl,
+  hasAmapKey,
+  reverseGeocodeLocation,
+  searchLocationSuggestions,
+  searchNearbyFood,
+} from "./services/amap";
+import {
+  getCurrentTimeSlot,
+  loadEatStats,
+  recordAiReject,
+  recordAiUse,
+  recordCategoryChoice,
+  saveEatStats,
+  summarizeSlot,
+  type EatStats,
+} from "./services/eatStats";
+import {
+  getAiPickedLines,
+  getAiRejectedLines,
+  getIdlePetLines,
+  getPlacePetLines,
+  type PetLines,
+  type PetMood,
+} from "./services/petLogic";
 import { recommendPlaces } from "./services/recommend";
-import type { FoodCategoryId, GeoLocation, Place, RecommendResponse } from "./types";
+import type { FoodCategoryId, GeoLocation, LocationSuggestion, Place, RecommendResponse, WeatherSnapshot } from "./types";
 
 const iconMap = {
   Rice: Utensils,
@@ -31,6 +57,15 @@ const iconMap = {
 
 type SearchSource = "amap" | "mock";
 type SortMode = "distance" | "rating";
+type AiPickMode = "randomTaste" | "lockedTaste";
+type PetAnchor = { left: number; top: number };
+type ModalPetAnchor = { ai: number; customer: number };
+
+const quickLocations: GeoLocation[] = [
+  { lng: 113.2644, lat: 23.1291, label: "广州中心" },
+  { lng: 113.3246, lat: 23.1067, label: "珠江新城" },
+  { lng: 113.3308, lat: 23.1189, label: "体育西路" },
+];
 
 function formatDistance(distance: number) {
   if (!distance) return "距离未知";
@@ -75,10 +110,36 @@ function getBubblePosition(index: number, total: number) {
   return layouts[Math.min(total, 6)]?.[index] ?? { left: 50, top: 66 };
 }
 
+function getRandomPetAnchors(): { ai: PetAnchor; customer: PetAnchor } {
+  const anchors = [
+    { ai: { left: 8, top: 24 }, customer: { left: 78, top: 62 } },
+    { ai: { left: 14, top: 58 }, customer: { left: 72, top: 28 } },
+    { ai: { left: 76, top: 22 }, customer: { left: 10, top: 66 } },
+    { ai: { left: 5, top: 42 }, customer: { left: 82, top: 46 } },
+  ];
+  return anchors[Math.floor(Math.random() * anchors.length)];
+}
+
+function getRandomModalPetAnchors(): ModalPetAnchor {
+  const anchors: ModalPetAnchor[] = [
+    { ai: 28, customer: 70 },
+    { ai: 36, customer: 62 },
+    { ai: 22, customer: 78 },
+    { ai: 44, customer: 66 },
+  ];
+  return anchors[Math.floor(Math.random() * anchors.length)];
+}
+
 export default function App() {
   const [location, setLocation] = useState<GeoLocation | null>(null);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("点击定位后，马上帮你看看附近有什么可吃。");
+  const [manualLocationText, setManualLocationText] = useState("");
+  const [isResolvingLocation, setIsResolvingLocation] = useState(false);
+  const [locationSuggestions, setLocationSuggestions] = useState<LocationSuggestion[]>([]);
+  const [isSuggestingLocation, setIsSuggestingLocation] = useState(false);
+  const [isLocationSuggestOpen, setIsLocationSuggestOpen] = useState(false);
+  const [weather, setWeather] = useState<WeatherSnapshot | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<FoodCategoryId>("staple");
   const [selectedSubtypes, setSelectedSubtypes] = useState<string[]>(["rice", "noodle"]);
   const [places, setPlaces] = useState<Place[]>([]);
@@ -92,6 +153,13 @@ export default function App() {
   const [aiRecommendation, setAiRecommendation] = useState<RecommendResponse | null>(null);
   const [aiPool, setAiPool] = useState<Place[]>([]);
   const [aiSubtypes, setAiSubtypes] = useState<string[]>([]);
+  const [stats, setStats] = useState<EatStats>(() => loadEatStats());
+  const initialSlot = useRef(getCurrentTimeSlot());
+  const [petMood, setPetMood] = useState<PetMood>("idle");
+  const [petLines, setPetLines] = useState<PetLines>(() => getIdlePetLines(initialSlot.current.id, null));
+  const [petScoldCount, setPetScoldCount] = useState(0);
+  const [petAnchors, setPetAnchors] = useState(() => getRandomPetAnchors());
+  const [modalPetAnchors, setModalPetAnchors] = useState(() => getRandomModalPetAnchors());
   const lockedRecommendation = useRef<RecommendResponse | null>(null);
 
   const category = useMemo(
@@ -99,6 +167,9 @@ export default function App() {
     [selectedCategory],
   );
   const categorySubtypeIds = useMemo(() => new Set(category.subtypes.map((item) => item.id)), [category]);
+  const activeSlot = getCurrentTimeSlot();
+  const activeStats = stats[activeSlot.id];
+  const maxCategoryCount = Math.max(1, ...foodCategories.map((item) => activeStats.categories[item.id] ?? 0));
 
   function normalizeSubtypes(subtypeIds: string[], fallbackCategory = category) {
     const validIds = new Set(fallbackCategory.subtypes.map((item) => item.id));
@@ -132,6 +203,39 @@ export default function App() {
     });
   }, [places, sortMode]);
 
+  function sortPlaces(placeList: Place[]) {
+    return [...placeList].sort((a, b) => {
+      if (sortMode === "rating") {
+        return (b.rating ?? 0) - (a.rating ?? 0) || a.distance - b.distance;
+      }
+
+      return a.distance - b.distance;
+    });
+  }
+
+  function updateStats(updater: (current: EatStats) => EatStats) {
+    setStats((current) => {
+      const next = updater(current);
+      saveEatStats(next);
+      return next;
+    });
+  }
+
+  function getSubtypeName(subtypeId?: string) {
+    if (!subtypeId) return undefined;
+    return foodCategories.flatMap((item) => item.subtypes).find((item) => item.id === subtypeId)?.name;
+  }
+
+  function showIdlePetTalk() {
+    setPetMood("idle");
+    setPetLines(getIdlePetLines(getCurrentTimeSlot().id, weather));
+  }
+
+  function showPlacePetTalk(place: Place) {
+    setPetMood("comment");
+    setPetLines(getPlacePetLines(place, getSubtypeName(place.subtype), getCurrentTimeSlot().id, weather));
+  }
+
   const resultItems = useMemo(
     () => sortedPlaces.map((place) => ({ place, pick: null })),
     [sortedPlaces],
@@ -162,9 +266,15 @@ export default function App() {
     setLocationStatus("loading");
     setStatusMessage("正在确认你附近的美食雷达范围。");
     const result = await getBrowserLocation();
-    setLocation(result.location);
+    const readableLocation =
+      result.status === "ready" ? await reverseGeocodeLocation(result.location) : result.location;
+    setLocation(readableLocation);
     setLocationStatus(result.status);
-    setStatusMessage(result.message);
+    setStatusMessage(
+      result.status === "ready" && readableLocation.label
+        ? `已定位到 ${readableLocation.label}`
+        : result.message,
+    );
   }
 
   async function refreshPlaces(categoryId = selectedCategory, subtypeIds = selectedSubtypes) {
@@ -188,6 +298,7 @@ export default function App() {
     const nextSubtypes = next.subtypes.slice(0, 2).map((item) => item.id);
     setSelectedCategory(categoryId);
     setSelectedSubtypes(nextSubtypes);
+    updateStats((current) => recordCategoryChoice(current, categoryId, getCurrentTimeSlot().id));
     void refreshPlaces(categoryId, nextSubtypes);
   }
 
@@ -204,35 +315,91 @@ export default function App() {
     void refreshPlaces(selectedCategory, nextSubtypes);
   }
 
-  async function runAiPick() {
+  async function applyManualLocation() {
+    const keyword = manualLocationText.trim();
+    if (!keyword || isResolvingLocation) return;
+
+    setIsResolvingLocation(true);
+    setIsLocationSuggestOpen(false);
+    setStatusMessage(`正在查找「${keyword}」附近。`);
+    const resolved = await geocodeKeyword(keyword);
+    setIsResolvingLocation(false);
+
+    if (!resolved) {
+      setStatusMessage("没有找到这个位置，可以换个更具体的地名或商圈。");
+      return;
+    }
+
+    setLocation(resolved);
+    setLocationStatus("ready");
+    setStatusMessage(`已切换到 ${resolved.label ?? keyword} 附近。`);
+  }
+
+  function applyQuickLocation(nextLocation: GeoLocation) {
+    setLocation(nextLocation);
+    setLocationStatus("ready");
+    setManualLocationText(nextLocation.label ?? "");
+    setIsLocationSuggestOpen(false);
+    setLocationSuggestions([]);
+    setStatusMessage(`已切换到 ${nextLocation.label ?? "手动位置"} 附近。`);
+  }
+
+  function applySuggestedLocation(suggestion: LocationSuggestion) {
+    setLocation(suggestion.location);
+    setLocationStatus("ready");
+    setManualLocationText(suggestion.name);
+    setIsLocationSuggestOpen(false);
+    setLocationSuggestions([]);
+    setStatusMessage(`已切换到 ${suggestion.name} 附近。`);
+  }
+
+  async function runAiPick(mode: AiPickMode) {
     if (isRolling || !sortedPlaces.length) return;
+    updateStats((current) => recordAiUse(current, getCurrentTimeSlot().id));
     setIsRolling(true);
     setAiModalOpen(true);
     setAiRecommendation(null);
     setAiPool(sortedPlaces);
     lockedRecommendation.current = null;
-    const finalSubtypes = getRandomSubtypeGroup(selectedSubtypes);
+    const finalSubtypes = mode === "randomTaste" ? getRandomSubtypeGroup(selectedSubtypes) : normalizeSubtypes(selectedSubtypes);
     setAiSubtypes(finalSubtypes);
 
     const startedAt = Date.now();
-    const rollTimer = window.setInterval(() => {
-      const nextRolling = getRandomSubtypeGroup();
-      setRollingSubtypes(nextRolling);
-      setAiSubtypes(nextRolling);
-    }, 140);
+    const rollTimer =
+      mode === "randomTaste"
+        ? window.setInterval(() => {
+            const nextRolling = getRandomSubtypeGroup();
+            setRollingSubtypes(nextRolling);
+            setAiSubtypes(nextRolling);
+          }, 140)
+        : undefined;
 
     window.setTimeout(() => {
-      window.clearInterval(rollTimer);
+      if (rollTimer) window.clearInterval(rollTimer);
       setRollingSubtypes(finalSubtypes);
       setAiSubtypes(finalSubtypes);
 
       void (async () => {
+        const pool =
+          mode === "randomTaste"
+            ? sortPlaces(
+                (
+                  await searchNearbyFood({
+                    location,
+                    category: selectedCategory,
+                    subtypes: finalSubtypes,
+                  })
+                ).places,
+              )
+            : sortedPlaces;
+        setAiPool(pool);
+
         const locked = await recommendPlaces({
           userText,
           location,
           selectedCategory,
-          selectedSubtypes,
-          places: sortedPlaces,
+          selectedSubtypes: finalSubtypes,
+          places: pool,
         });
         lockedRecommendation.current = locked;
 
@@ -241,14 +408,25 @@ export default function App() {
           setAiRecommendation(lockedRecommendation.current);
           setIsRolling(false);
           setRollingSubtypes([]);
-          setStatusMessage(`AI 看完当前 ${sortedPlaces.length} 个选择，给你圈了 3 个答案。`);
+          setPetMood("praise");
+          setPetLines(getAiPickedLines());
+          setStatusMessage(
+            mode === "randomTaste"
+              ? `AI 随机换了口味，看完 ${pool.length} 个选择，给你圈了 3 个答案。`
+              : `AI 按当前口味，看完 ${pool.length} 个选择，给你圈了 3 个答案。`,
+          );
         }, Math.max(0, 2600 - elapsed));
       })();
-    }, 1600);
+    }, mode === "randomTaste" ? 1600 : 700);
   }
 
   async function rerollAiBatch() {
     if (isRolling || !aiPool.length) return;
+    const rejectCount = (stats[getCurrentTimeSlot().id].aiRejects ?? 0) + 1;
+    updateStats((current) => recordAiReject(current, getCurrentTimeSlot().id));
+    setPetMood("scold");
+    setPetScoldCount((count) => count + 1);
+    setPetLines(getAiRejectedLines(rejectCount));
     setIsRolling(true);
     setAiRecommendation(null);
     const nextSubtypes = getRandomSubtypeGroup(aiSubtypes.length ? aiSubtypes : selectedSubtypes);
@@ -282,6 +460,7 @@ export default function App() {
     setAiSubtypes([]);
     setRollingSubtypes([]);
     setIsRolling(false);
+    showIdlePetTalk();
   }
 
   function changeSortMode(nextMode: SortMode) {
@@ -294,24 +473,35 @@ export default function App() {
     void refreshPlaces(selectedCategory, nextSubtypes);
   }
 
-  function swapSameType(place: Place) {
-    const alternatives = places.filter(
-      (item) => item.subtype === place.subtype && item.id !== place.id,
+  function swapSameType(place: Place, pickIndex: number) {
+    const currentIds = new Set(aiRecommendation?.picks.map((pick) => pick.placeId) ?? []);
+    const alternatives = aiPool.filter(
+      (item) => item.subtype === place.subtype && item.id !== place.id && !currentIds.has(item.id),
     );
     if (!alternatives.length) {
-      void refreshPlaces(selectedCategory, place.subtype ? [place.subtype] : selectedSubtypes);
+      setPetMood("scold");
+      setPetLines({
+        ai: "这类备选已经被你榨干了，我先护住另外两张牌。",
+        customer: "行吧，这次先记账。",
+      });
       return;
     }
     const next = alternatives[Math.floor(Math.random() * alternatives.length)];
-    setAiRecommendation({
-      fallbackSubtype: next.subtype,
-      picks: [
-        {
-          placeId: next.id,
-          reason: "换了一家同类型的店，适合保留刚刚的口味方向。",
-          confidence: Math.round((next.rating ?? 4.4) * 18),
-        },
-      ],
+    setAiRecommendation((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        fallbackSubtype: next.subtype,
+        picks: current.picks.map((pick, index) =>
+          index === pickIndex
+            ? {
+                placeId: next.id,
+                reason: "换了一家同类型的店，保留刚刚的口味方向，只动这一张牌。",
+                confidence: Math.round((next.rating ?? 4.4) * 18),
+              }
+            : pick,
+        ),
+      };
     });
   }
 
@@ -322,6 +512,65 @@ export default function App() {
   useEffect(() => {
     if (location) void refreshPlaces(selectedCategory, selectedSubtypes);
   }, [location]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setWeather(null);
+
+    void (async () => {
+      const nextWeather = await getCurrentWeather(location);
+      if (!cancelled) setWeather(nextWeather);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location]);
+
+  useEffect(() => {
+    if (petMood === "idle") {
+      setPetLines(getIdlePetLines(getCurrentTimeSlot().id, weather));
+    }
+  }, [weather, petMood]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!aiModalOpen) setPetAnchors(getRandomPetAnchors());
+    }, 3600);
+
+    return () => window.clearInterval(timer);
+  }, [aiModalOpen]);
+
+  useEffect(() => {
+    if (!aiModalOpen || petMood === "scold") return undefined;
+
+    const timer = window.setInterval(() => {
+      setModalPetAnchors(getRandomModalPetAnchors());
+    }, 3200);
+
+    return () => window.clearInterval(timer);
+  }, [aiModalOpen, petMood]);
+
+  useEffect(() => {
+    if (!isLocationSuggestOpen) return;
+
+    let cancelled = false;
+    const delay = manualLocationText.trim() ? 220 : 0;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setIsSuggestingLocation(true);
+        const suggestions = await searchLocationSuggestions(manualLocationText, location);
+        if (cancelled) return;
+        setLocationSuggestions(suggestions);
+        setIsSuggestingLocation(false);
+      })();
+    }, delay);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [isLocationSuggestOpen, manualLocationText, location]);
 
   return (
     <main className="app-shell">
@@ -349,6 +598,76 @@ export default function App() {
         <span className={searchSource === "amap" ? "source source-live" : "source"}>
           {searchSource === "amap" ? "高德实时" : hasAmapKey() ? "模拟兜底" : "模拟模式"}
         </span>
+      </section>
+
+      <section className="location-tuner" aria-label="位置校准">
+        <div className="location-summary">
+          <span>当前位置</span>
+          <strong>{location?.label ?? "等待定位"}</strong>
+          {location ? (
+            <small>
+              {location.lng.toFixed(5)}, {location.lat.toFixed(5)}
+            </small>
+          ) : null}
+        </div>
+        <div className="location-tools">
+          <div className="location-search">
+            <input
+              value={manualLocationText}
+              onFocus={() => setIsLocationSuggestOpen(true)}
+              onBlur={() => window.setTimeout(() => setIsLocationSuggestOpen(false), 140)}
+              onChange={(event) => {
+                setManualLocationText(event.target.value);
+                setIsLocationSuggestOpen(true);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void applyManualLocation();
+              }}
+              aria-expanded={isLocationSuggestOpen}
+              placeholder="输入商圈、地标或地址"
+            />
+            <button className="ghost-button" onClick={() => void applyManualLocation()} disabled={isResolvingLocation}>
+              {isResolvingLocation ? "查找中" : "使用位置"}
+            </button>
+            {isLocationSuggestOpen ? (
+              <div className="location-suggestions" role="listbox">
+                {isSuggestingLocation ? (
+                  <div className="location-suggestion muted">正在从高德查找附近位置...</div>
+                ) : null}
+                {!isSuggestingLocation && locationSuggestions.length
+                  ? locationSuggestions.map((item) => (
+                      <button
+                        className="location-suggestion"
+                        key={item.id}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => applySuggestedLocation(item)}
+                        type="button"
+                      >
+                        <strong>{item.name}</strong>
+                        {item.address ? <small>{item.address}</small> : null}
+                      </button>
+                    ))
+                  : null}
+                {!isSuggestingLocation && !locationSuggestions.length ? (
+                  <div className="location-suggestion muted">
+                    {hasAmapKey() ? "暂无匹配位置，试试更具体的商圈或地标" : "配置高德 Key 后可使用位置联想"}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          <div className="location-chips">
+            <button className="ghost-button" onClick={locate} disabled={locationStatus === "loading"}>
+              <LocateFixed size={14} />
+              重新定位
+            </button>
+            {quickLocations.map((item) => (
+              <button className="ghost-button" key={`${item.lng}-${item.lat}`} onClick={() => applyQuickLocation(item)}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="layout">
@@ -410,15 +729,57 @@ export default function App() {
               onChange={(event) => setUserText(event.target.value)}
               placeholder="比如：不想太辣，想吃热乎的，最好别走太远。"
             />
-            <button className="primary-button" onClick={runAiPick} disabled={isRolling || !places.length}>
-              {isRolling ? <RotateCcw size={18} className="spin" /> : <MessageCircle size={18} />}
-              {isRolling ? "AI 正在分析" : "让 AI 帮我选"}
-            </button>
+            <div className="ai-action-row">
+              <button
+                className="primary-button secondary-ai-button"
+                onClick={() => runAiPick("randomTaste")}
+                disabled={isRolling || !places.length}
+              >
+                {isRolling ? <RotateCcw size={18} className="spin" /> : <Shuffle size={18} />}
+                <span>{isRolling ? "AI 正在分析" : "随机口味"}</span>
+              </button>
+              <button
+                className="primary-button"
+                onClick={() => runAiPick("lockedTaste")}
+                disabled={isRolling || !places.length}
+              >
+                {isRolling ? <RotateCcw size={18} className="spin" /> : <MessageCircle size={18} />}
+                <span>{isRolling ? "AI 正在分析" : "按当前口味"}</span>
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="stage">
-          <div className={`wheel ${isRolling ? "wheel-active" : ""}`}>
+          <div className="stage-top">
+            <div className={`wheel-zone pet-mood-${petMood}`}>
+              <div className="pet-scene" aria-live="polite">
+                <div className={`speech-bubble ai-speech ${petMood === "scold" ? "urgent" : ""}`}>
+                  {petLines.ai}
+                </div>
+                <div
+                  className={`pet ai-pet ${petMood === "scold" ? "is-scolded" : ""}`}
+                  key={`ai-${petScoldCount}`}
+                  style={{ left: `${petAnchors.ai.left}%`, top: `${petAnchors.ai.top}%` }}
+                >
+                  <span className="pet-label">AI</span>
+                  <span className="pet-head"><i /><i /></span>
+                  <span className="pet-body"><b /></span>
+                  <span className="pet-feet" />
+                </div>
+                <div
+                  className="pet customer-pet"
+                  style={{ left: `${petAnchors.customer.left}%`, top: `${petAnchors.customer.top}%` }}
+                >
+                  <span className="pet-label">顾客</span>
+                  <span className="pet-head"><i /><i /></span>
+                  <span className="pet-body"><b /></span>
+                  <span className="pet-feet" />
+                </div>
+                <div className="speech-bubble customer-speech">{petLines.customer}</div>
+              </div>
+
+              <div className={`wheel ${isRolling ? "wheel-active" : ""}`}>
             <div className="wheel-category">
               <strong>{category.name}</strong>
             </div>
@@ -445,6 +806,39 @@ export default function App() {
                 );
               })}
             </div>
+              </div>
+            </div>
+
+            <aside className="stats-panel" aria-label="当前时间段选择统计">
+              <p className="eyebrow">LIVE TASTE</p>
+              <h3>{activeSlot.name}战报</h3>
+              <span className="weather-chip">
+                {weather?.weather ? `${weather.city ?? "附近"} · ${weather.weather}${weather.temperature ? ` ${weather.temperature}°C` : ""}` : "本地统计"}
+              </span>
+              <div className="stat-bars">
+                {foodCategories.map((item) => {
+                  const count = activeStats.categories[item.id] ?? 0;
+                  return (
+                    <div className="stat-row" key={item.id}>
+                      <span>{item.name}</span>
+                      <i style={{ width: `${Math.max(8, (count / maxCategoryCount) * 100)}%` }} />
+                      <strong>{count}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="ai-stat-grid">
+                <div>
+                  <strong>{activeStats.aiUses}</strong>
+                  <span>AI 出手</span>
+                </div>
+                <div>
+                  <strong>{activeStats.aiRejects}</strong>
+                  <span>不满意</span>
+                </div>
+              </div>
+              <p className="stat-summary">{summarizeSlot(activeStats)}</p>
+            </aside>
           </div>
 
           <div className="results-head">
@@ -473,7 +867,12 @@ export default function App() {
 
           <div className="result-list">
             {resultItems.map(({ place }, index) => (
-              <article className="place-card" key={`${place.id}-${index}`}>
+              <article
+                className="place-card"
+                key={`${place.id}-${index}`}
+                onMouseEnter={() => showPlacePetTalk(place)}
+                onMouseLeave={showIdlePetTalk}
+              >
                 <div className="place-rank">{String(index + 1).padStart(2, "0")}</div>
                 <div className={`place-photo ${place.photos?.[0] ? "" : "place-photo-empty"}`}>
                   {place.photos?.[0] ? (
@@ -498,7 +897,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="place-actions">
-                  <a href={getAmapNavigationUrl(place)} target="_blank" rel="noreferrer" title="打开地图导航">
+                  <a href={getAmapNavigationUrl(place, location)} target="_blank" rel="noreferrer" title="打开地图导航">
                     <Navigation size={16} />
                     <span>去这里</span>
                   </a>
@@ -529,6 +928,29 @@ export default function App() {
               })}
             </div>
 
+            <div className={`modal-pet-strip pet-mood-${petMood}`}>
+              <div className="modal-pet-track" aria-hidden="true">
+                <div
+                  className={`pet ai-pet mini ${petMood === "scold" ? "is-scolded" : ""}`}
+                  key={`modal-ai-${petScoldCount}`}
+                  style={{ left: `${modalPetAnchors.ai}%` }}
+                >
+                  <span className="pet-talk ai-talk">{petLines.ai}</span>
+                  <span className="pet-label">AI</span>
+                  <span className="pet-head"><i /><i /></span>
+                  <span className="pet-body"><b /></span>
+                  <span className="pet-feet" />
+                </div>
+                <div className="pet customer-pet mini" style={{ left: `${modalPetAnchors.customer}%` }}>
+                  <span className="pet-talk customer-talk">{petLines.customer}</span>
+                  <span className="pet-label">顾客</span>
+                  <span className="pet-head"><i /><i /></span>
+                  <span className="pet-body"><b /></span>
+                  <span className="pet-feet" />
+                </div>
+              </div>
+            </div>
+
             {aiRecommendedPlaces.length ? (
               <div className="ai-result-grid">
                 {aiRecommendedPlaces.map(({ place, pick }, index) => (
@@ -556,11 +978,11 @@ export default function App() {
                       </div>
                     </div>
                     <div className="place-actions">
-                      <button onClick={() => swapSameType(place)} title="换同类型店铺">
+                      <button onClick={() => swapSameType(place, index)} title="换同类型店铺">
                         <RefreshCw size={16} />
                         <span>换一家</span>
                       </button>
-                      <a href={getAmapNavigationUrl(place)} target="_blank" rel="noreferrer" title="打开地图导航">
+                      <a href={getAmapNavigationUrl(place, location)} target="_blank" rel="noreferrer" title="打开地图导航">
                         <Navigation size={16} />
                         <span>去这里</span>
                       </a>
@@ -597,3 +1019,4 @@ export default function App() {
     </main>
   );
 }
+

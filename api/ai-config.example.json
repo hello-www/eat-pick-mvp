@@ -1,0 +1,13 @@
+{
+  "provider": "openai",
+  "openai": {
+    "apiKey": "sk-your-openai-key",
+    "model": "gpt-4o-mini",
+    "baseUrl": "https://api.openai.com/v1"
+  },
+  "compatible": {
+    "apiKey": "your-compatible-model-key",
+    "model": "your-model-name",
+    "baseUrl": "https://your-compatible-endpoint/v1"
+  }
+}

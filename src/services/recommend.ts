@@ -50,6 +50,23 @@ function localRecommend(request: RecommendRequest): RecommendResponse {
   };
 }
 
+function isValidResponse(value: unknown, request: RecommendRequest): value is RecommendResponse {
+  if (!value || typeof value !== "object") return false;
+  const response = value as RecommendResponse;
+  const allowedIds = new Set(request.places.map((place) => place.id));
+  return (
+    Array.isArray(response.picks) &&
+    response.picks.length > 0 &&
+    response.picks.every(
+      (pick) =>
+        typeof pick.placeId === "string" &&
+        allowedIds.has(pick.placeId) &&
+        typeof pick.reason === "string" &&
+        Number.isFinite(pick.confidence),
+    )
+  );
+}
+
 export async function recommendPlaces(request: RecommendRequest): Promise<RecommendResponse> {
   try {
     const response = await fetch("/api/recommend", {
@@ -59,7 +76,8 @@ export async function recommendPlaces(request: RecommendRequest): Promise<Recomm
     });
 
     if (response.ok) {
-      return (await response.json()) as RecommendResponse;
+      const data = await response.json();
+      if (isValidResponse(data, request)) return data;
     }
   } catch {
     // Local recommendation keeps the demo complete before the backend exists.

@@ -24,6 +24,19 @@ export interface GeoLocation {
   label?: string;
 }
 
+export interface LocationSuggestion {
+  id: string;
+  name: string;
+  address?: string;
+  location: GeoLocation;
+}
+
+export interface WeatherSnapshot {
+  city?: string;
+  weather?: string;
+  temperature?: number;
+}
+
 export interface Place {
   id: string;
   name: string;

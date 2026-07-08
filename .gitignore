@@ -4,4 +4,8 @@ dist
 .vercel
 .env
 .env.*
+api/ai-config.local.json
 *.log
+
+.vercel
+.env*
