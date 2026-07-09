@@ -54,6 +54,9 @@ export interface RecommendRequest {
   location: GeoLocation | null;
   selectedCategory?: FoodCategoryId;
   selectedSubtypes?: string[];
+  selectedSubtypeLabels?: string[];
+  weather?: WeatherSnapshot | null;
+  timeSlot?: string;
   places: Place[];
 }
 
@@ -66,4 +69,5 @@ export interface RecommendPick {
 export interface RecommendResponse {
   picks: RecommendPick[];
   fallbackSubtype?: string;
+  source?: "ai" | "local";
 }

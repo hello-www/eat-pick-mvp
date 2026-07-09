@@ -98,6 +98,7 @@ function localRecommend(request) {
     .slice(0, 3);
 
   return {
+    source: "local",
     fallbackSubtype: ranked[0]?.place.subtype,
     picks: ranked.map(({ place, score }, index) => ({
       placeId: place.id,
@@ -117,6 +118,9 @@ function normalizeRequest(body) {
     location: body?.location ?? null,
     selectedCategory: body?.selectedCategory,
     selectedSubtypes: Array.isArray(body?.selectedSubtypes) ? body.selectedSubtypes.slice(0, 12) : [],
+    selectedSubtypeLabels: Array.isArray(body?.selectedSubtypeLabels) ? body.selectedSubtypeLabels.slice(0, 12) : [],
+    weather: body?.weather ?? null,
+    timeSlot: typeof body?.timeSlot === "string" ? body.timeSlot : "",
     places: places
       .filter((place) => place && typeof place.id === "string" && typeof place.name === "string")
       .slice(0, 30),
@@ -153,6 +157,7 @@ function sanitizeAiResponse(raw, request) {
   if (!cleanPicks.length) return null;
 
   return {
+    source: "ai",
     picks: cleanPicks,
     fallbackSubtype: typeof raw?.fallbackSubtype === "string" ? raw.fallbackSubtype : undefined,
   };
@@ -175,7 +180,7 @@ async function callAi(request) {
       {
         role: "system",
         content:
-          "你是一个懂附近餐饮选择的中文推荐助手。只能从给定 places 中挑选。返回严格 JSON：{\"picks\":[{\"placeId\":\"\",\"reason\":\"\",\"confidence\":80}],\"fallbackSubtype\":\"\"}。推荐 3 家，reason 简短自然，不要编造店铺信息。",
+          '你是一个懂附近餐饮选择的中文推荐助手。只能从给定 places 中挑选，结合用户描述、当前时间段、天气、距离、评分和已选口味。返回严格 JSON：{"picks":[{"placeId":"","reason":"","confidence":80}],"fallbackSubtype":""}。推荐 3 家，reason 要短、自然、像朋友帮忙拍板，不要编造店铺信息。',
       },
       {
         role: "user",
@@ -184,6 +189,9 @@ async function callAi(request) {
           location: request.location,
           selectedCategory: request.selectedCategory,
           selectedSubtypes: request.selectedSubtypes,
+          selectedSubtypeLabels: request.selectedSubtypeLabels,
+          weather: request.weather,
+          timeSlot: request.timeSlot,
           places: request.places.map(compactPlace),
         }),
       },

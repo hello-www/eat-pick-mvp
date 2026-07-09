@@ -1,8 +1,12 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Ban,
+  Clipboard,
   Compass,
   CupSoda,
   Flame,
+  Heart,
+  Info,
   Leaf,
   LocateFixed,
   MapPinned,
@@ -39,6 +43,7 @@ import {
 import {
   getAiPickedLines,
   getAiRejectedLines,
+  getAiThinkingLines,
   getIdlePetLines,
   getPlacePetLines,
   type PetLines,
@@ -66,6 +71,10 @@ const quickLocations: GeoLocation[] = [
   { lng: 113.3246, lat: 23.1067, label: "珠江新城" },
   { lng: 113.3308, lat: 23.1189, label: "体育西路" },
 ];
+
+const recentLocationsKey = "eat-pick-mvp-recent-locations-v1";
+const favoritePlacesKey = "eat-pick-mvp-favorite-places-v1";
+const hiddenPlacesKey = "eat-pick-mvp-hidden-places-v1";
 
 function formatDistance(distance: number) {
   if (!distance) return "距离未知";
@@ -112,10 +121,10 @@ function getBubblePosition(index: number, total: number) {
 
 function getRandomPetAnchors(): { ai: PetAnchor; customer: PetAnchor } {
   const anchors = [
-    { ai: { left: 8, top: 24 }, customer: { left: 78, top: 62 } },
-    { ai: { left: 14, top: 58 }, customer: { left: 72, top: 28 } },
-    { ai: { left: 76, top: 22 }, customer: { left: 10, top: 66 } },
-    { ai: { left: 5, top: 42 }, customer: { left: 82, top: 46 } },
+    { ai: { left: 22, top: 38 }, customer: { left: 78, top: 58 } },
+    { ai: { left: 24, top: 62 }, customer: { left: 72, top: 36 } },
+    { ai: { left: 76, top: 34 }, customer: { left: 22, top: 64 } },
+    { ai: { left: 26, top: 48 }, customer: { left: 80, top: 48 } },
   ];
   return anchors[Math.floor(Math.random() * anchors.length)];
 }
@@ -130,6 +139,42 @@ function getRandomModalPetAnchors(): ModalPetAnchor {
   return anchors[Math.floor(Math.random() * anchors.length)];
 }
 
+function loadRecentLocations(): GeoLocation[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const stored = window.localStorage.getItem(recentLocationsKey);
+    const parsed = stored ? (JSON.parse(stored) as GeoLocation[]) : [];
+    return parsed
+      .filter((item) => Number.isFinite(item.lng) && Number.isFinite(item.lat) && item.label)
+      .slice(0, 4);
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentLocations(locations: GeoLocation[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(recentLocationsKey, JSON.stringify(locations.slice(0, 4)));
+}
+
+function loadStringList(key: string): string[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const stored = window.localStorage.getItem(key);
+    const parsed = stored ? (JSON.parse(stored) as string[]) : [];
+    return parsed.filter((item) => typeof item === "string");
+  } catch {
+    return [];
+  }
+}
+
+function saveStringList(key: string, list: string[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, JSON.stringify(list));
+}
+
 export default function App() {
   const [location, setLocation] = useState<GeoLocation | null>(null);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
@@ -139,6 +184,7 @@ export default function App() {
   const [locationSuggestions, setLocationSuggestions] = useState<LocationSuggestion[]>([]);
   const [isSuggestingLocation, setIsSuggestingLocation] = useState(false);
   const [isLocationSuggestOpen, setIsLocationSuggestOpen] = useState(false);
+  const [recentLocations, setRecentLocations] = useState<GeoLocation[]>(() => loadRecentLocations());
   const [weather, setWeather] = useState<WeatherSnapshot | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<FoodCategoryId>("staple");
   const [selectedSubtypes, setSelectedSubtypes] = useState<string[]>(["rice", "noodle"]);
@@ -149,6 +195,9 @@ export default function App() {
   const [isRolling, setIsRolling] = useState(false);
   const [rollingSubtypes, setRollingSubtypes] = useState<string[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>("distance");
+  const [favoritePlaceIds, setFavoritePlaceIds] = useState<string[]>(() => loadStringList(favoritePlacesKey));
+  const [hiddenPlaceIds, setHiddenPlaceIds] = useState<string[]>(() => loadStringList(hiddenPlacesKey));
+  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiRecommendation, setAiRecommendation] = useState<RecommendResponse | null>(null);
   const [aiPool, setAiPool] = useState<Place[]>([]);
@@ -193,15 +242,21 @@ export default function App() {
       .filter(Boolean) as Array<{ place: Place; pick: RecommendResponse["picks"][number] }>;
   }, [aiPool, aiRecommendation]);
 
+  const visiblePlaces = useMemo(
+    () => places.filter((place) => !hiddenPlaceIds.includes(place.id)),
+    [hiddenPlaceIds, places],
+  );
+  const hiddenPlaceCount = places.length - visiblePlaces.length;
+
   const sortedPlaces = useMemo(() => {
-    return [...places].sort((a, b) => {
+    return [...visiblePlaces].sort((a, b) => {
       if (sortMode === "rating") {
         return (b.rating ?? 0) - (a.rating ?? 0) || a.distance - b.distance;
       }
 
       return a.distance - b.distance;
     });
-  }, [places, sortMode]);
+  }, [sortMode, visiblePlaces]);
 
   function sortPlaces(placeList: Place[]) {
     return [...placeList].sort((a, b) => {
@@ -236,6 +291,61 @@ export default function App() {
     setPetLines(getPlacePetLines(place, getSubtypeName(place.subtype), getCurrentTimeSlot().id, weather));
   }
 
+  function markNavigationStart(place: Place) {
+    setStatusMessage(`正在打开到「${place.name}」的高德导航，已尽量带上当前位置作为起点。`);
+  }
+
+  function toggleFavoritePlace(place: Place) {
+    const isFavorite = favoritePlaceIds.includes(place.id);
+    const next = isFavorite
+      ? favoritePlaceIds.filter((id) => id !== place.id)
+      : [place.id, ...favoritePlaceIds].slice(0, 80);
+    setFavoritePlaceIds(next);
+    saveStringList(favoritePlacesKey, next);
+    setStatusMessage(isFavorite ? `已取消收藏「${place.name}」。` : `已收藏「${place.name}」，这家先放进心动名单。`);
+  }
+
+  function hidePlace(place: Place) {
+    if (hiddenPlaceIds.includes(place.id)) return;
+    const next = [place.id, ...hiddenPlaceIds].slice(0, 120);
+    setHiddenPlaceIds(next);
+    saveStringList(hiddenPlacesKey, next);
+    if (selectedPlace?.id === place.id) setSelectedPlace(null);
+    setStatusMessage(`已隐藏「${place.name}」，这家今天先不看。`);
+  }
+
+  function restoreHiddenPlaces() {
+    setHiddenPlaceIds([]);
+    saveStringList(hiddenPlacesKey, []);
+    setStatusMessage("已恢复全部隐藏店铺。");
+  }
+
+  async function copyPlaceAddress(place: Place) {
+    const text = `${place.name}\n${place.address}\n${place.location.lng},${place.location.lat}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatusMessage(`已复制「${place.name}」的地址和坐标。`);
+    } catch {
+      setStatusMessage(`复制失败，可以手动记录：${place.address}`);
+    }
+  }
+
+  function rememberLocation(nextLocation: GeoLocation) {
+    if (!nextLocation.label) return;
+    setRecentLocations((current) => {
+      const next = [
+        nextLocation,
+        ...current.filter(
+          (item) =>
+            item.label !== nextLocation.label &&
+            (Math.abs(item.lng - nextLocation.lng) > 0.00001 || Math.abs(item.lat - nextLocation.lat) > 0.00001),
+        ),
+      ].slice(0, 4);
+      saveRecentLocations(next);
+      return next;
+    });
+  }
+
   const resultItems = useMemo(
     () => sortedPlaces.map((place) => ({ place, pick: null })),
     [sortedPlaces],
@@ -243,7 +353,9 @@ export default function App() {
 
   const resultCountLabel = isSearching
     ? "搜索中..."
-    : `${resultItems.length} 家可选`;
+    : hiddenPlaceCount
+      ? `${resultItems.length} 家可选 · 已隐藏 ${hiddenPlaceCount} 家`
+      : `${resultItems.length} 家可选`;
 
   function getRandomSubtypeGroup(avoidSubtypes = selectedSubtypes) {
     const normalize = (ids: string[]) => [...ids].sort().join("|");
@@ -269,6 +381,7 @@ export default function App() {
     const readableLocation =
       result.status === "ready" ? await reverseGeocodeLocation(result.location) : result.location;
     setLocation(readableLocation);
+    if (result.status === "ready") rememberLocation(readableLocation);
     setLocationStatus(result.status);
     setStatusMessage(
       result.status === "ready" && readableLocation.label
@@ -332,12 +445,14 @@ export default function App() {
 
     setLocation(resolved);
     setLocationStatus("ready");
+    rememberLocation(resolved);
     setStatusMessage(`已切换到 ${resolved.label ?? keyword} 附近。`);
   }
 
   function applyQuickLocation(nextLocation: GeoLocation) {
     setLocation(nextLocation);
     setLocationStatus("ready");
+    rememberLocation(nextLocation);
     setManualLocationText(nextLocation.label ?? "");
     setIsLocationSuggestOpen(false);
     setLocationSuggestions([]);
@@ -347,6 +462,7 @@ export default function App() {
   function applySuggestedLocation(suggestion: LocationSuggestion) {
     setLocation(suggestion.location);
     setLocationStatus("ready");
+    rememberLocation(suggestion.location);
     setManualLocationText(suggestion.name);
     setIsLocationSuggestOpen(false);
     setLocationSuggestions([]);
@@ -357,6 +473,8 @@ export default function App() {
     if (isRolling || !sortedPlaces.length) return;
     updateStats((current) => recordAiUse(current, getCurrentTimeSlot().id));
     setIsRolling(true);
+    setPetMood("thinking");
+    setPetLines(getAiThinkingLines());
     setAiModalOpen(true);
     setAiRecommendation(null);
     setAiPool(sortedPlaces);
@@ -399,6 +517,11 @@ export default function App() {
           location,
           selectedCategory,
           selectedSubtypes: finalSubtypes,
+          selectedSubtypeLabels: finalSubtypes
+            .map((id) => category.subtypes.find((item) => item.id === id)?.name)
+            .filter(Boolean) as string[],
+          weather,
+          timeSlot: getCurrentTimeSlot().name,
           places: pool,
         });
         lockedRecommendation.current = locked;
@@ -442,6 +565,11 @@ export default function App() {
       location,
       selectedCategory,
       selectedSubtypes,
+      selectedSubtypeLabels: selectedSubtypes
+        .map((id) => category.subtypes.find((item) => item.id === id)?.name)
+        .filter(Boolean) as string[],
+      weather,
+      timeSlot: getCurrentTimeSlot().name,
       places: aiPool,
     });
 
@@ -666,6 +794,11 @@ export default function App() {
                 {item.label}
               </button>
             ))}
+            {recentLocations.map((item) => (
+              <button className="ghost-button recent-location" key={`${item.label}-${item.lng}-${item.lat}`} onClick={() => applyQuickLocation(item)}>
+                {item.label}
+              </button>
+            ))}
           </div>
         </div>
       </section>
@@ -754,14 +887,14 @@ export default function App() {
           <div className="stage-top">
             <div className={`wheel-zone pet-mood-${petMood}`}>
               <div className="pet-scene" aria-live="polite">
-                <div className={`speech-bubble ai-speech ${petMood === "scold" ? "urgent" : ""}`}>
-                  {petLines.ai}
-                </div>
                 <div
                   className={`pet ai-pet ${petMood === "scold" ? "is-scolded" : ""}`}
                   key={`ai-${petScoldCount}`}
                   style={{ left: `${petAnchors.ai.left}%`, top: `${petAnchors.ai.top}%` }}
                 >
+                  <span className={`speech-bubble ai-speech ${petMood === "scold" ? "urgent" : ""}`}>
+                    {petLines.ai}
+                  </span>
                   <span className="pet-label">AI</span>
                   <span className="pet-head"><i /><i /></span>
                   <span className="pet-body"><b /></span>
@@ -771,12 +904,12 @@ export default function App() {
                   className="pet customer-pet"
                   style={{ left: `${petAnchors.customer.left}%`, top: `${petAnchors.customer.top}%` }}
                 >
+                  <span className="speech-bubble customer-speech">{petLines.customer}</span>
                   <span className="pet-label">顾客</span>
                   <span className="pet-head"><i /><i /></span>
                   <span className="pet-body"><b /></span>
                   <span className="pet-feet" />
                 </div>
-                <div className="speech-bubble customer-speech">{petLines.customer}</div>
               </div>
 
               <div className={`wheel ${isRolling ? "wheel-active" : ""}`}>
@@ -810,11 +943,15 @@ export default function App() {
             </div>
 
             <aside className="stats-panel" aria-label="当前时间段选择统计">
-              <p className="eyebrow">LIVE TASTE</p>
-              <h3>{activeSlot.name}战报</h3>
-              <span className="weather-chip">
-                {weather?.weather ? `${weather.city ?? "附近"} · ${weather.weather}${weather.temperature ? ` ${weather.temperature}°C` : ""}` : "本地统计"}
-              </span>
+              <div className="stats-heading">
+                <div>
+                  <p className="eyebrow">LIVE TASTE</p>
+                  <h3>{activeSlot.name}战报</h3>
+                </div>
+                <span className="weather-chip">
+                  {weather?.weather ? `${weather.city ?? "附近"} · ${weather.weather}${weather.temperature ? ` ${weather.temperature}°C` : ""}` : "本地统计"}
+                </span>
+              </div>
               <div className="stat-bars">
                 {foodCategories.map((item) => {
                   const count = activeStats.categories[item.id] ?? 0;
@@ -860,6 +997,11 @@ export default function App() {
                 >
                   评分优先
                 </button>
+                {hiddenPlaceCount ? (
+                  <button onClick={restoreHiddenPlaces}>
+                    恢复隐藏
+                  </button>
+                ) : null}
               </div>
               <span>{resultCountLabel}</span>
             </div>
@@ -874,6 +1016,22 @@ export default function App() {
                 onMouseLeave={showIdlePetTalk}
               >
                 <div className="place-rank">{String(index + 1).padStart(2, "0")}</div>
+                <div className="place-quick-actions" aria-label={`${place.name} 快捷操作`}>
+                  <button
+                    className={favoritePlaceIds.includes(place.id) ? "active" : ""}
+                    onClick={() => toggleFavoritePlace(place)}
+                    title={favoritePlaceIds.includes(place.id) ? "取消收藏" : "收藏"}
+                    type="button"
+                  >
+                    <Heart size={15} />
+                  </button>
+                  <button onClick={() => setSelectedPlace(place)} title="查看详情" type="button">
+                    <Info size={15} />
+                  </button>
+                  <button onClick={() => hidePlace(place)} title="不想吃这家" type="button">
+                    <Ban size={15} />
+                  </button>
+                </div>
                 <div className={`place-photo ${place.photos?.[0] ? "" : "place-photo-empty"}`}>
                   {place.photos?.[0] ? (
                     <img
@@ -897,7 +1055,13 @@ export default function App() {
                   </div>
                 </div>
                 <div className="place-actions">
-                  <a href={getAmapNavigationUrl(place, location)} target="_blank" rel="noreferrer" title="打开地图导航">
+                  <a
+                    href={getAmapNavigationUrl(place, location)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="打开地图导航"
+                    onClick={() => markNavigationStart(place)}
+                  >
                     <Navigation size={16} />
                     <span>去这里</span>
                   </a>
@@ -926,6 +1090,11 @@ export default function App() {
                 const subtype = category.subtypes.find((item) => item.id === subtypeId);
                 return subtype ? <span key={subtype.id}>{subtype.name}</span> : null;
               })}
+              {aiRecommendation ? (
+                <span className={`ai-source-pill ${aiRecommendation.source === "ai" ? "live" : ""}`}>
+                  {aiRecommendation.source === "ai" ? "真实 AI" : "本地规则"}
+                </span>
+              ) : null}
             </div>
 
             <div className={`modal-pet-strip pet-mood-${petMood}`}>
@@ -982,7 +1151,13 @@ export default function App() {
                         <RefreshCw size={16} />
                         <span>换一家</span>
                       </button>
-                      <a href={getAmapNavigationUrl(place, location)} target="_blank" rel="noreferrer" title="打开地图导航">
+                      <a
+                        href={getAmapNavigationUrl(place, location)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="打开地图导航"
+                        onClick={() => markNavigationStart(place)}
+                      >
                         <Navigation size={16} />
                         <span>去这里</span>
                       </a>
@@ -1005,6 +1180,64 @@ export default function App() {
               <button className="ghost-button" onClick={closeAiModal}>
                 继续自己找
               </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {selectedPlace ? (
+        <div className="detail-backdrop" onClick={() => setSelectedPlace(null)}>
+          <section className="place-detail" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <button className="icon-button detail-close" onClick={() => setSelectedPlace(null)} title="关闭详情">
+              <X size={18} />
+            </button>
+            <div className={`place-photo detail-photo ${selectedPlace.photos?.[0] ? "" : "place-photo-empty"}`}>
+              {selectedPlace.photos?.[0] ? (
+                <img
+                  src={selectedPlace.photos[0]}
+                  alt={`${selectedPlace.name} 店铺照片`}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <span>{selectedPlace.name.slice(0, 1)}</span>
+              )}
+            </div>
+            <div className="detail-copy">
+              <p className="eyebrow">PLACE DETAIL</p>
+              <h2>{selectedPlace.name}</h2>
+              <p>{selectedPlace.address}</p>
+              <div className="place-meta">
+                <span>{formatDistance(selectedPlace.distance)}</span>
+                {selectedPlace.rating ? <span>{selectedPlace.rating.toFixed(1)} 分</span> : null}
+                {getSubtypeName(selectedPlace.subtype) ? <span>{getSubtypeName(selectedPlace.subtype)}</span> : null}
+              </div>
+            </div>
+            <div className="detail-actions">
+              <button onClick={() => copyPlaceAddress(selectedPlace)}>
+                <Clipboard size={16} />
+                复制地址
+              </button>
+              <button
+                className={favoritePlaceIds.includes(selectedPlace.id) ? "active" : ""}
+                onClick={() => toggleFavoritePlace(selectedPlace)}
+              >
+                <Heart size={16} />
+                {favoritePlaceIds.includes(selectedPlace.id) ? "已收藏" : "收藏"}
+              </button>
+              <button onClick={() => hidePlace(selectedPlace)}>
+                <Ban size={16} />
+                不想吃
+              </button>
+              <a
+                href={getAmapNavigationUrl(selectedPlace, location)}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => markNavigationStart(selectedPlace)}
+              >
+                <Navigation size={16} />
+                去这里
+              </a>
             </div>
           </section>
         </div>

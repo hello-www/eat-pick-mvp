@@ -6,7 +6,7 @@ export interface PetLines {
   customer: string;
 }
 
-export type PetMood = "idle" | "comment" | "praise" | "scold";
+export type PetMood = "idle" | "comment" | "thinking" | "praise" | "scold";
 
 const timeFlavor: Record<TimeSlotId, string> = {
   "late-night": "这个点还在纠结吃什么，胃已经开始写小作文了。",
@@ -85,6 +85,13 @@ export function getAiPickedLines(): PetLines {
   return {
     ai: "我圈好了三家，今天的选择困难先交给我保管。",
     customer: "这次算你有点东西。",
+  };
+}
+
+export function getAiThinkingLines(): PetLines {
+  return {
+    ai: "我正在把天气、距离、评分和你的口味塞进脑子里摇一摇。",
+    customer: "快点，我饿的时候耐心很短。",
   };
 }
 

@@ -2,9 +2,9 @@ import { foodCategories } from "../data/food";
 import type { Place, RecommendRequest, RecommendResponse } from "../types";
 
 const moodRules = [
-  { terms: ["辣", "重口", "刺激", "火锅", "热"], boost: ["hotpot", "mala", "bbq"] },
-  { terms: ["清淡", "健康", "不腻", "轻"], boost: ["salad", "soup", "brunch"] },
-  { terms: ["快", "赶时间", "简单"], boost: ["rice", "noodle", "baozi"] },
+  { terms: ["辣", "重口", "刺激", "火锅", "麻"], boost: ["hotpot", "mala", "bbq", "skewer"] },
+  { terms: ["清淡", "健康", "不腻", "轻", "舒服"], boost: ["salad", "soup", "brunch"] },
+  { terms: ["快", "赶时间", "简单", "便宜"], boost: ["rice", "noodle", "baozi"] },
   { terms: ["甜", "喝", "咖啡", "奶茶"], boost: ["milk-tea", "coffee", "dessert"] },
   { terms: ["夜宵", "晚", "饿"], boost: ["late", "bbq", "skewer"] },
 ];
@@ -38,6 +38,7 @@ function localRecommend(request: RecommendRequest): RecommendResponse {
     .find((subtype) => subtype.id === fallbackSubtype)?.name;
 
   return {
+    source: "local",
     fallbackSubtype,
     picks: ranked.map(({ place, score }, index) => ({
       placeId: place.id,
@@ -45,7 +46,7 @@ function localRecommend(request: RecommendRequest): RecommendResponse {
       reason:
         index === 0
           ? `${fallbackLabel ?? "这一类"}和你刚刚的描述更贴近，距离也比较友好。`
-          : "作为备选很稳，口味和距离都比较均衡。",
+          : "作为备选很稳，口味、评分和距离都比较均衡。",
     })),
   };
 }

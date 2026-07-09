@@ -55,7 +55,7 @@ export function makeMockPlaces(category?: FoodCategoryId, subtypes?: string[]): 
     names[categoryId]
       .filter(([, subtypeId]) => !subtypes?.length || subtypes.includes(subtypeId))
       .flatMap(([name, subtypeId], index) => {
-        const variants = ["", "·精选店", "·快取店"];
+        const variants = ["", "·精选店", "·快取店", "·深夜店", "·街角店", "·人气店"];
         return variants.map((suffix, variantIndex) => {
           const seed = categoryIndex * 17 + index * 3 + variantIndex + 1;
           return {

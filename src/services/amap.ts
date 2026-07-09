@@ -259,23 +259,38 @@ export async function searchNearbyFood(params: {
 
   if (!key || !params.location) return fallback();
 
-  const keywords = getCategoryKeywords(params.category, params.subtypes).slice(0, 6).join("|");
-  const url = new URL("https://restapi.amap.com/v3/place/around");
-  url.searchParams.set("key", key);
-  url.searchParams.set("location", `${params.location.lng},${params.location.lat}`);
-  url.searchParams.set("keywords", keywords);
-  url.searchParams.set("types", "050000");
-  url.searchParams.set("radius", "2500");
-  url.searchParams.set("offset", "20");
-  url.searchParams.set("page", "1");
-  url.searchParams.set("extensions", "all");
+  const location = params.location;
+  const keywords = getCategoryKeywords(params.category, params.subtypes).slice(0, 8).join("|");
+  const searchPages = [1, 2, 3];
 
   try {
-    const response = await fetch(url);
-    const data = (await response.json()) as AmapSearchResponse;
-    if (data.status !== "1" || !data.pois?.length) return fallback();
+    const pageResults = await Promise.all(
+      searchPages.map(async (page) => {
+        const url = new URL("https://restapi.amap.com/v3/place/around");
+        url.searchParams.set("key", key);
+        url.searchParams.set("location", `${location.lng},${location.lat}`);
+        url.searchParams.set("keywords", keywords);
+        url.searchParams.set("types", "050000");
+        url.searchParams.set("radius", "4000");
+        url.searchParams.set("offset", "25");
+        url.searchParams.set("page", String(page));
+        url.searchParams.set("extensions", "all");
 
-    const filteredPois = data.pois.filter((poi) => matchesCurrentCategory(poi, params.category));
+        const response = await fetch(url);
+        const data = (await response.json()) as AmapSearchResponse;
+        return data.status === "1" ? data.pois ?? [] : [];
+      }),
+    );
+
+    const uniquePois = new Map<string, AmapPoi>();
+    for (const poi of pageResults.flat()) {
+      const id = poi.id ?? `${poi.name}-${poi.location}`;
+      if (id) uniquePois.set(id, poi);
+    }
+
+    if (!uniquePois.size) return fallback();
+
+    const filteredPois = [...uniquePois.values()].filter((poi) => matchesCurrentCategory(poi, params.category));
     if (!filteredPois.length) return fallback();
 
     const places = filteredPois.map((poi, index) => ({
